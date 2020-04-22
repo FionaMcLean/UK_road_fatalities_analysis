@@ -1,0 +1,138 @@
+---
+title: "Analysis of Road Fatalities"
+author: "Fiona McLean"
+output: pdf_document
+header-includes:
+  - \usepackage[table,xcdraw]{xcolor}
+  - \usepackage{subcaption}
+  - \usepackage{float}
+
+---
+
+\newcommand{\subfloat}[2][need a sub-caption]{\subcaptionbox{#1}{#2} }
+```{r setup, include=FALSE, cache=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+pedestrainFile = Pmisc::downloadIfOld("http://pbrown.ca/teaching/appliedstats/data/pedestrians.rds")
+pedestrians = readRDS(pedestrainFile)
+pedestrians = pedestrians[!is.na(pedestrians$time),
+                          ]
+pedestrians$y = pedestrians$Casualty_Severity == "Fatal"
+pedestrians$timeCat = format(pedestrians$time, "%Y_%b_%a_h%H") #create a strata from time and weather and date -> same weather, same month, and same day and same hour
+pedestrians$strata = paste(pedestrians$Light_Conditions,
+                           pedestrians$Weather_Conditions, pedestrians$timeCat)
+length(unique(pedestrians$strata)) #there are 176391 different strata 
+#remove strata with no cases or no controls - otherwise we have no idea what is going on 
+theTable = table(pedestrians$strata, pedestrians$y) #this table tells us if there has been a person with injury or not in each strata - notice the first 5 are not helpful, we need one case and once control in each strata
+
+onlyOne = rownames(theTable)[which(theTable[, 1] ==
+                                     0 | theTable[, 2] == 0)]
+x = pedestrians[!pedestrians$strata %in% onlyOne, ] #25-36 men is the baseline group 
+
+library("survival")
+library(dplyr)
+```
+
+##Introduction 
+Understanding road fatalities is important as legislators and health officials look to limit fatalities and make roads safer. Men are involved in accidents more than women, and the proportion of accidents which are fatal is higher for men than for women. This may be due in part to women being more reluctant than men to walk outdoors late at night or in poor weather, and could also reflect men being on average more likely to engage in more risky behavior than women. In this report, we assess whether the UK road accident data are consistent with the hypothesis that women tend to be, on average, safer as pedestrians than men, particularly as teenagers and in early adulthood.
+
+##Methods
+The data set used in the analysis is from the UK government, which contains all road traffic accidents in the UK. There are 1,159,453 observations spanning from 1979 to 2015. 
+
+As an exploratory tool, tables of slight and fatal casualties and sex were created. Fatal accidents as treated as cases and slight injuries are treated as controls, moderate injuries are ignored.
+
+In order to determine if women tend to be, on average, safer as pedestrians than men, particularly as teenagers and in early adulthood data is stratified so that observation of accidents from the same light and weather conditions in the same year, month, day and hour were grouped together. Strata with no cases or no controls were removed. Since we strata on time and weather conditions, the fact that more men may be out at night or in bad weather conditions is controlled for, and only risky behavior is left in the analysis. We set men aged 25-36 as the baseline group. In order to test our hypothesis, a conditional logistic regression model was constructed, where we condition on being in an accident. The fixed effects in the model are age of the person in the accident and an interaction term age and sex. We include the interaction between sex and age because we believe that men and women propensity to be in fatal accidents may be different between different ages. 
+
+The model is:   
+   
+$Y_{ij} \sim Bernoulli(P_{ij})$  
+$logit(P_{ij}) = \alpha_{i} + X_{ij}\beta$, where:  
+
+- $Y_{ij}$ is the probability person i from strata j had a fatal accident, given they were in an accident
+- $\alpha_{i}$ is the intercept of each strata
+- $X_{ij}\beta$ are the covariates age and age*sex
+
+##Results
+
+To gain some intuition as to how different the number of fatal accidents are between sexes, given the person was in an accident, a table was created to show the number of fatal and slight accidents for each sex. 
+
+```{r, echo=FALSE}
+theTable = table(pedestrians$Casualty_Severity, pedestrians$sex) #this table tells us if there has been a person with injury or not in each strata - notice the first 5 are not helpful, we need one case and once control in each strata
+#since we match on weather, time, etc, we do not have to worry about the fact that more men are out at night
+knitr::kable(theTable, caption = "The table below shows that the proportion of fatal accidents are higher for men than for women in the data set.")
+```
+
+To better understand how the number of fatal accidents change for each sex and age group, a chart showing the number of fatal accidents for each sex in each age group was created. The graph shows that more accidents are fatal for men in every age category except for over 75.
+
+
+```{r, include=FALSE}
+library(dplyr)
+new_dat <- pedestrians %>% count(Casualty_Severity, sex, age)%>% filter(Casualty_Severity == "Fatal")
+```
+
+```{r, echo=FALSE, fig.cap="The figure above shows that in the vast majority of age groups, men have more fatal accidents. As it is a scientific fact that women live longer than men, perhaps women have more fatal accidents in the over 75 group simply because there are more women alive and able to drive than men at this age.", fig.align='center', out.width = "85%", fig.pos="H"}
+
+library(ggplot2)
+
+
+# make grouped bar plot
+ggplot(new_dat) +
+  # add bar for each discipline colored by gender
+  geom_bar(aes(x = age, y = n, fill = sex),
+           stat = "identity", position = "dodge") +
+  # name axes and remove gap between bars and y-axis
+  scale_y_continuous("Fatal Accidents") +
+  scale_x_discrete("Age") +
+  scale_fill_manual(values = c("#add8e6", "#ffc0cb")) +
+  # remove grey theme
+  theme_classic(base_size = 18) +
+  # rotate x-axis and remove superfluous axis elements
+  theme(axis.text.x = element_text(angle = 90, 
+                                   hjust = 1, vjust = 0),
+        axis.line = element_blank(),
+        axis.ticks.x = element_blank())+ ggtitle("Fatal Accidents by Sex and Age") 
+```
+
+
+```{r, echo=FALSE, cache=TRUE}
+theClogit = clogit(y ~ age + age:sex + strata(strata),
+                   data = x)
+```
+
+
+We now run the model described above to determine whether the UK road accident data are consistent with the hypothesis that women tend to be, on average, safer as pedestrians than men, particularly as teenagers and in early adulthood. We plot the results of the model for better interpretability.  
+
+
+```{r, echo=FALSE, cache=TRUE, fig.cap="The left plot shows the odds that an accident is fatal, given the man is in an accident compared to the baseline of 25-36 year old men. The right plot show the odds of a fatal accident for a woman, given she is in an accident, compared to a man of the same age.", fig.align='center', fig.pos="H"}
+par(mfrow=c(1,2))
+theCoef = rbind(as.data.frame(summary(theClogit)$coef),
+                `age 26 - 35` = c(0, 1, 0, NA, NA))
+theCoef$sex = c("Male", "Female")[1 + grepl("Female",
+                                            rownames(theCoef))]
+theCoef$age = as.numeric(gsub("age|Over| - [[:digit:]].*|[:].*",
+                              "", rownames(theCoef)))
+theCoef = theCoef[order(theCoef$sex, theCoef$age),
+
+                                    ]
+matplot(theCoef[theCoef$sex == "Male", "age"], exp(as.matrix(theCoef[theCoef$sex ==
+                                                                       "Male", c("coef", "se(coef)")]) %*% Pmisc::ciMat(0.99)),
+        log = "y", type = "l", col = "black", lty = c(1,2, 2), xaxs = "i", yaxs = "i", xlab = "Age", ylab="Odds of Fatal Accident Compared to Base", main ="Odds Fatal Accident for Male Given in Accident", cex.main=.75)
+
+
+matplot(theCoef[theCoef$sex == "Female", "age"], exp(as.matrix(theCoef[theCoef$sex ==
+                                                                         "Female", c("coef", "se(coef)")]) %*% Pmisc::ciMat(0.99)),
+        log = "y", type = "l", col = "black", lty = c(1,
+                                                      2, 2), xaxs = "i", xlab="Age", ylab= "Odds Compared to Male Same Age", main = "Odds Fatal Accident for Women Compared to Man", cex.main=.70)
+#the plot for women is compared to men, so this looks like 70 year old women and men are about the same 
+# given that a man is in an accident, the man at age x, the odds of being in a fatal accident is y times higher than those of age 25-30
+#the odds of woman being in fatal accident, given they are in an accident, is the rate times the odds of the man at the given age. 
+
+
+```
+
+We first start by discussing the results of the model displayed for men in the left plot. For each age group, we compare the odds of being in a fatal accident given the person is in an accident compared to the baseline age of 25-36. For example, for men under the age group of 25-36, it appears the odds of being in a fatal accident given the person is in an accident is lower than for men of the age 25-36. However, after the age of 25-36, the odds of a man being in a fatal accident given he is in an accident increases compared to the baseline age of 25-36. At the age of 70, the odds a man is in a fatal accident given he is in an accident is 10 times the odds of a 25-36 year old man. Therefore, we can conclude that the odds of being in a fatal accident for men given they are in an accident increase steadily after the age of 30, compared to men aged 25-36. Now we analyze the graph on the right, which displays the odds that a woman is in a fatal accident, given she is in an accident compared to a man of the same age. For example, at the age of 10, the odds of woman is in a fatal accident, given she is in an accident, is about .8 the odds of a 10 year old man compared to the baseline of men ages 25-36. We can see that for almost all ages, the odds of a woman being in a fatal accident given she is in an accident compared to a man of the same age is under 1, meaning that the women is less likely to be in a fatal accident. 
+
+To answer our main research question as to if women tend to be, on average, safer as pedestrians than men, particularly as teenagers and in early adulthood, we compare the odds of a woman being in a fatal accident given that she is in an accident to a man of the same age between 10 and 25. We can see that the odds a woman is in a fatal accident compared to men is much lower, about .8 the odds of man of the same age at 10, decreasing all the way to about .65 the odds of a man the same age at 25. As noted before, at almost every age the odds of a woman being in a fatal accident given she is in an accident compared to a man is lower than 1. Therefore, the model suggests that women are safer pedestrians than men at almost every age, but especially teenage to young adult ages. 
+
+##Conclusion
+
+To determine how fatality rates of accidents differ between men and women at different ages, a conditional logistic regression model was constructed. In order to remove the possibility that more men drive in the dark or bad weather conditions, the model considers time down to the hour, as well as weather and lighting conditions. The model suggests that at almost every age group, the odds a woman is in a fatal accident given she is in an accident compared to a man the same age is lower. At the teenage and young adult ages, the odds of a fatal accident compared to a man the same age are particularly lower, between .8 to .65 the odds of man, suggesting that women are especially safer pedestrians in the young adult ages. 
